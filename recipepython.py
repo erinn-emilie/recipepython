@@ -7,14 +7,8 @@ import requests
 app = Flask(__name__)
 CORS(app)
 
-@app.route('/run-script', methods=['POST'])
-def run_script():
 
-    url = request.json["url"]
-    page = requests.get(url)
-    soup = BeautifulSoup(page.text, 'html.parser')
-
-
+def parse_allrecipes(soup):
     json_script_tag = soup.find('script', type='application/ld+json')
     json_string = json_script_tag.string
     json_data = json.loads(json_string)
@@ -49,6 +43,66 @@ def run_script():
         "yield": recipe_yield,
         "instructions": instructions
     }
+
+    return return_dictionary
+
+
+def parse_modernhoney(soup):
+    
+    json_script_tag = soup.find('script', type='application/ld+json')
+
+    json_string = json_script_tag.string
+
+    json_data = json.loads(json_string)
+
+    json_dict = json_data["@graph"]
+
+
+    for dict in json_dict:
+        if dict["@type"] == "Recipe":
+
+            author = dict["author"]["@id"]
+            recipe_name = dict["name"]
+            cuisine_type = dict["recipeCuisine"]
+            recipe_category = dict["recipeCategory"]
+            ingredients = dict["recipeIngredient"]
+            cook_time = dict["cookTime"]
+            rating = dict["aggregateRating"]["ratingValue"]
+            review_count = dict["aggregateRating"]["ratingCount"]
+            recipe_yield = dict["recipeYield"]
+
+            stepsList = dict["recipeInstructions"]
+            instructions = []
+
+            for step in stepsList:
+                instructions.append(step["text"])
+    
+    return_dictionary = {
+        "author": author,
+        "name": recipe_name,
+        "cuisine": cuisine_type,
+        "category": recipe_category,
+        "ingredients": ingredients,
+        "cook_time": cook_time,
+        "rating": rating,
+        "reviews": review_count,
+        "yield": recipe_yield,
+        "instructions": instructions
+    }
+    
+
+@app.route('/run-script', methods=['POST'])
+def run_script():
+    url = request.json["url"]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
+    page = requests.get(url, headers=headers)
+    soup = BeautifulSoup(page.text, 'html.parser')
+
+    if "allrecipes" in url:
+        return_dictionary = parse_allrecipes(soup)
+    else:
+        return_dictionary = parse_modernhoney(soup)
+
 
     return return_dictionary
 
