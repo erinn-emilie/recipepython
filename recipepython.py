@@ -16,7 +16,10 @@ def parse_allrecipes(soup):
 
 
     author = json_dict["author"][0]["name"]
+
     recipe_name = json_dict["headline"]
+    recipe_name = recipe_name.replace("&#39;", "'")
+
     cuisine_type = json_dict["recipeCuisine"]
     recipe_category = json_dict["recipeCategory"]
     ingredients = json_dict["recipeIngredient"]
@@ -47,7 +50,7 @@ def parse_allrecipes(soup):
     return return_dictionary
 
 
-def parse_modernhoney(soup):
+def parse_other(soup, urlType):
     
     json_script_tag = soup.find('script', type='application/ld+json')
 
@@ -55,27 +58,41 @@ def parse_modernhoney(soup):
 
     json_data = json.loads(json_string)
 
+    print(json_data)
+
     json_dict = json_data["@graph"]
 
 
     for dict in json_dict:
         if dict["@type"] == "Recipe":
 
-            author = dict["author"]["@id"]
+            if urlType == "modernhoney":
+                if "@id" in dict["author"]:
+                    author = dict["author"]["@id"]
+                else:
+                    author = dict["author"]["name"]
+                rating = dict["aggregateRating"]["ratingValue"]
+                review_count = dict["aggregateRating"]["ratingCount"]
+                recipe_yield = dict["recipeYield"]
+            else:
+                author = dict["author"]["name"]
+                rating = dict["aggregateRating"]["ratingValue"]
+                review_count = dict["aggregateRating"]["reviewCount"]
+                recipe_yield = dict["recipeYield"][1]
+
+
             recipe_name = dict["name"]
             cuisine_type = dict["recipeCuisine"]
             recipe_category = dict["recipeCategory"]
             ingredients = dict["recipeIngredient"]
             cook_time = dict["cookTime"]
-            rating = dict["aggregateRating"]["ratingValue"]
-            review_count = dict["aggregateRating"]["ratingCount"]
-            recipe_yield = dict["recipeYield"]
 
             stepsList = dict["recipeInstructions"]
             instructions = []
 
             for step in stepsList:
                 instructions.append(step["text"])
+
     
     return_dictionary = {
         "author": author,
@@ -89,6 +106,8 @@ def parse_modernhoney(soup):
         "yield": recipe_yield,
         "instructions": instructions
     }
+
+    return return_dictionary
     
 
 @app.route('/run-script', methods=['POST'])
@@ -100,8 +119,10 @@ def run_script():
 
     if "allrecipes" in url:
         return_dictionary = parse_allrecipes(soup)
+    elif "modernhoney" in url:
+        return_dictionary = parse_other(soup, "modernhoney")
     else:
-        return_dictionary = parse_modernhoney(soup)
+        return_dictionary = parse_other(soup, "pinchofyum")
 
 
     return return_dictionary
