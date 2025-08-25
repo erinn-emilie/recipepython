@@ -12,9 +12,6 @@ import bcrypt
 import re
 
 
-#CONNECTION STRING: Server=localhost\SQLEXPRESS;Database=master;Trusted_Connection=True;
-
-
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'mssql+pyodbc:///?odbc_connect=DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost\\SQLEXPRESS;DATABASE=RecipeDB;Trusted_Connection=yes;'
 CORS(app)
@@ -39,6 +36,13 @@ loginCodes = {
     "SUCCESS": 2
 }
 
+saveRecipeCodes = {
+    "NOMESSAGE": 0,
+    "INVALUSER": 1,
+    "DOUBLESAVE": 2,
+    "SUCCESS": 3
+}
+
 class Users(database.Model):
     userID: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str]
@@ -49,6 +53,26 @@ class Users(database.Model):
     lastname: Mapped[str]
     dateofacccreation: Mapped[date] = mapped_column(DATE, default=date.today)
     savedrecipes: Mapped[str]
+    savedingredients: Mapped[str]
+
+class Recipes(database.Model):
+    recipeID: Mapped[int] = mapped_column(primary_key=True)
+    author: Mapped[str]
+    name: Mapped[str]
+    cuisine: Mapped[str]
+    category: Mapped[str]
+    ingredients: Mapped[str]
+    cook_time: Mapped[str]
+    rating: Mapped[float]
+    reviews: Mapped[int]
+    yield_col: Mapped[str] = mapped_column('yield', database.String(50))     
+    instructions: Mapped[str]
+    date: Mapped[date] = mapped_column(DATE)
+    site_name: Mapped[str]
+    nutrition: Mapped[str]
+    url: Mapped[str]
+
+
 
 def parse_allrecipes(soup):
     json_script_tag = soup.find('script', type='application/ld+json')
@@ -125,10 +149,13 @@ def parse_other(soup, urlType):
                     author = dict["author"]["name"]
                 review_count = dict["aggregateRating"]["ratingCount"]
                 recipe_yield = dict["recipeYield"]
+                nutrition = {}
+
             else:
                 author = dict["author"]["name"]
                 review_count = dict["aggregateRating"]["reviewCount"]
                 recipe_yield = dict["recipeYield"][1]
+                nutrition = dict["nutrition"]
 
             rating = dict["aggregateRating"]["ratingValue"]
             recipe_name = dict["name"]
@@ -138,7 +165,6 @@ def parse_other(soup, urlType):
             cook_time = dict["cookTime"]
 
             date_published = dict["datePublished"]
-            nutrition = dict["nutrition"]
 
 
 
@@ -198,6 +224,7 @@ def login_script():
 
     user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
     message = loginCodes["NOMESSAGE"]
+    userid = -1
 
     if user is None:
         message = loginCodes["INVALINFO"]
@@ -206,20 +233,22 @@ def login_script():
         hashbrown = user.password.encode('utf-8')
         if bcrypt.checkpw(password, hashbrown):
             message = loginCodes["SUCCESS"]
+            userid = user.userID
         else:
             message = loginCodes["INVALINFO"]
 
 
-    return {"message": message}
+    return {"message": message, "userid": userid}
 
 @app.route('/signup', methods=['POST'])
-def database_script():
+def signup_script():
     username = request.json["username"]
     password = request.json["password"].encode('utf-8') 
     retyped = request.json["retyped"].encode('utf-8') 
     email = request.json["email"]
 
     message = signupCodes["NOMESSAGE"]
+    userid = -1
 
     if password != retyped:
         message = signupCodes["PASSNOMATCH"]
@@ -248,9 +277,135 @@ def database_script():
                         )
                         database.session.add(user)
                         database.session.commit()
+                        dbuser = database.session.scalars(database.select(Users).filter_by(username=username, password=hashbrown)).one_or_none()
+                        userid = dbuser.userID
                         message = signupCodes["SUCCESS"]
 
+    return {"message": message, "userid": userid}
+
+@app.route('/save-recipe', methods=['POST'])
+def save_recipe():
+    # The usernamed and userid of the user that will have a recipe added to it
+    username = request.json["username"]
+    userid = request.json["userid"]
+    # The url and naem of the recipe that will be added to the database and/or user
+    url = request.json["url"]
+    recipename = request.json["name"]
+
+    # Initalizing some helper variables, message will be returned to client, initially there is no message
+    # doublesave indicated that the user has already saved this recipe, initially it is false
+    # finalsaverecipes is a placeholder for the string that will eventually hold all the recipe id's that the user has saved
+    message = saveRecipeCodes["NOMESSAGE"]
+    doublesave = False
+    finalsaverecipes = ""
+
+    # user and recipe are the database objects that represent the relevent user and recipe
+    user = database.session.scalars(database.select(Users).filter_by(userID=userid, username=username)).one_or_none()
+    recipe = database.session.scalars(database.select(Recipes).filter_by(url=url, name=recipename)).one_or_none()
+
+    # savedrecipes is the string that holds the users' current saved recipes string
+    savedrecipes = user.savedrecipes
+
+    # If the recipe already exists in the database
+    if not recipe is None:
+        # recipeid is set to the unique id of the recipe
+        recipeid = recipe.recipeID
+
+        # If the user already has saved recipes
+        if not savedrecipes is None:
+            # We split up the recipe ids' in the string and iterate through them, where curID is the current id from the string that we are on
+            slices = savedrecipes.split("--")
+            for bite in slices:
+                bite = bite.trim()
+                curID = int(bite)
+                # If curID is equal to the recipeid we are looking for, that means the user has already saved this recipe. The message is set and doublesave is set to true
+                if curID == recipeid:
+                    message = saveRecipeCodes["DOUBLESAVE"]
+                    doublesave = True
+                    break
+            # If doublesave isn't true, we append the recipeid to the end of the users' current savedrecipes string and store it in finalsaverecipes. The message is success
+            if not doublesave:
+                finalsaverecipes = savedrecipes + "--" + str(recipeid)
+                message = saveRecipeCodes["SUCCESS"]
+        # If savedrecipes is empty, finalsaverecipes becomes just this recipeid, as it is the only recipe the user has saved.
+        else:
+            finalsaverecipes = str(recipeid)
+            message = saveRecipeCodes["SUCCESS"]
+    # If the recipe is None, that means it is not in the database and we need to add it.
+    else:
+        # cuisine and category are initalized
+        cuisine = request.json["cuisine"]
+        cuisineStr = cuisine[0]
+        category = request.json["category"]
+        categoryStr = category[0]
+
+        # ingredients, instructions, and nutrition are formatted into strings to be stored
+        ingredients = request.json["ingredients"]
+        ingredientStr = ""
+        for ingredient in ingredients:
+           ingredientStr = ingredientStr + "---" + str(ingredient)
+
+        instructions = request.json["instructions"]
+        instructionStr = ""
+        for instruction in instructions:
+            instructionStr = instructionStr + "---" + str(instruction)
+
+        nutrition = request.json["nutrition"]
+        nutritionStr = ""
+        for key, value in nutrition.items():
+            nutritionStr = nutritionStr + "---" + str(key) +":" + str(value)
+
+        # Then the new recipe object is made, and the object is added to the database and committed
+        newrecipe = Recipes(
+            author = request.json["author"],
+            name = request.json["name"],
+            cuisine = cuisineStr,
+            category = categoryStr,
+            ingredients = ingredientStr,
+            cook_time = request.json["cook_time"],
+            rating = request.json["rating"],
+            reviews = request.json["reviews"],
+            yield_col = request.json["yield"],
+            instructions = instructionStr,
+            date = request.json["date"],
+            site_name = request.json["site_name"],
+            nutrition = nutritionStr,
+            url = request.json["url"]
+        )
+        database.session.add(newrecipe)
+        database.session.commit()
+
+        # newdbrecipe is then retrieved back from the database so we can access its unique recipe id
+        newdbrecipe = database.session.scalars(database.select(Recipes).filter_by(url=url, name=recipename)).one_or_none()
+        newrecipeid = newdbrecipe.recipeID
+
+        # If the user already has saved recipes, we append the newrecipeid to the current savedrecipes string and store it in final recipes. If not
+        # we add it as the only thing in the finalsaverecipes string
+        if not savedrecipes is None:
+            finalsaverecipes = savedrecipes + "---" + str(newrecipeid)
+        else:
+            finalsaverecipes = str(newrecipeid)
+
+        # The message is success
+        message = saveRecipeCodes["SUCCESS"]
+
+    # If we have a message of succes we can go ahead and change the users' savedrecipes string to our finalsaverecipes and commit that to the database
+    if message == saveRecipeCodes["SUCCESS"]:
+        user.savedrecipes = finalsaverecipes
+        database.session.commit()
+
+    # Then we return the message
     return {"message": message}
+
+        
+
+        
+
+
+
+
+
+              
 
 
 if __name__ == '__main__':
