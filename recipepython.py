@@ -34,7 +34,6 @@ signupCodes = {
     "SUCCESS": 6
 }
 
-
 loginCodes = {
     "NOMESSAGE": 0,
     "INVALINFO": 1,
@@ -112,7 +111,6 @@ def parse_allrecipes(json_data):
         "site_name": json_dict["publisher"]["name"],
         "nutrition": json_dict["nutrition"],
         "userliked": "false"
-
     }
 
     return return_dictionary
