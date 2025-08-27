@@ -1,3 +1,5 @@
+####
+from ast import parse
 from re import S
 from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
@@ -10,6 +12,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 from datetime import date, datetime
 import bcrypt
 import re
+
+
+
 
 
 app = Flask(__name__)
@@ -43,6 +48,7 @@ saveRecipeCodes = {
     "SUCCESS": 3
 }
 
+
 class Users(database.Model):
     userID: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str]
@@ -74,31 +80,8 @@ class Recipes(database.Model):
 
 
 
-def parse_allrecipes(soup):
-    json_script_tag = soup.find('script', type='application/ld+json')
-    json_string = json_script_tag.string
-    json_data = json.loads(json_string)
+def parse_allrecipes(json_data):
     json_dict = json_data[0]
-
-
-    author = json_dict["author"][0]["name"]
-
-    recipe_name = json_dict["headline"]
-
-    cuisine_type = json_dict["recipeCuisine"]
-    recipe_category = json_dict["recipeCategory"]
-    ingredients = json_dict["recipeIngredient"]
-    cook_time = json_dict["cookTime"]
-    rating = json_dict["aggregateRating"]["ratingValue"]
-    review_count = json_dict["aggregateRating"]["ratingCount"]
-    recipe_yield = json_dict["recipeYield"]
-
-    date_published = json_dict["datePublished"]
-    site_name = json_dict["publisher"]["name"]
-
-    nutrition = json_dict["nutrition"]
-
-
 
     stepsList = json_dict["recipeInstructions"]
     instructions = []
@@ -106,69 +89,90 @@ def parse_allrecipes(soup):
     for step in stepsList:
         instructions.append(step["text"])
 
+
+    if "aggregateRating" in json_dict:
+        rating = json_dict["aggregateRating"]["ratingValue"]
+        reviews = json_dict["aggregateRating"]["ratingCount"]
+    else:
+        rating = "Not available"
+        reviews = "Not available"
+
     return_dictionary = {
-        "author": author,
-        "name": recipe_name,
-        "cuisine": cuisine_type,
-        "category": recipe_category,
-        "ingredients": ingredients,
-        "cook_time": cook_time,
+        "author": json_dict["author"][0]["name"],
+        "name": json_dict["headline"],
+        "cuisine": json_dict["recipeCuisine"],
+        "category": json_dict["recipeCategory"],
+        "ingredients": json_dict["recipeIngredient"],
+        "cook_time": json_dict["cookTime"],
         "rating": rating,
-        "reviews": review_count,
-        "yield": recipe_yield,
+        "reviews": reviews,
+        "yield": json_dict["recipeYield"],
         "instructions": instructions,
-        "date": date_published,
-        "site_name": site_name,
-        "nutrition": nutrition
+        "date": json_dict["datePublished"],
+        "site_name": json_dict["publisher"]["name"],
+        "nutrition": json_dict["nutrition"],
+        "userliked": "false"
+
     }
 
     return return_dictionary
 
 
-def parse_other(soup, urlType):
-    
-    json_script_tag = soup.find('script', type='application/ld+json')
-
-    json_string = json_script_tag.string
-
-    json_data = json.loads(json_string)
-
-    print(json_data)
+def parse_other(json_data, urlType):
 
     json_dict = json_data["@graph"]
 
 
-    for dict in json_dict:
-        if dict["@type"] == "Organization" or dict["@type"] == "WebSite":
-            site_name = dict["name"]
-        if dict["@type"] == "Recipe":
-            if urlType == "modernhoney":
-                if "@id" in dict["author"]:
-                    author = dict["author"]["@id"]
+    for dic in json_dict:
+        if dic["@type"] == "Organization" or dic["@type"] == "WebSite":
+            site_name = dic["name"]
+
+        if dic["@type"] == "Recipe":
+
+            if "@id" in dic["author"]:
+                author = dic["author"]["@id"]
+            elif "name" in dic["author"]:
+                author = dic["author"]["name"]
+            else:
+                author = "Not available"
+
+
+            if "aggregateRating" in dic:
+                rating = dic["aggregateRating"]["ratingValue"]
+                if "ratingCount" in dic["aggregateRating"]:
+                    review_count =  dic["aggregateRating"]["ratingCount"]
+                elif "reviewCount" in dic["aggregateRating"]:
+                    review_count = dic["aggregateRating"]["reviewCount"]
                 else:
-                    author = dict["author"]["name"]
-                review_count = dict["aggregateRating"]["ratingCount"]
-                recipe_yield = dict["recipeYield"]
+                    review_count = "Not available"
+            else:
+                rating = "Not available"
+                review_count = "Not available"
+
+
+            if "nutrition" in dic:
+                nutrition = dic["nutrition"]
+            else:
                 nutrition = {}
 
+
+
+            if urlType == "modernhoney":
+                recipe_yield = dic["recipeYield"]
+
             else:
-                author = dict["author"]["name"]
-                review_count = dict["aggregateRating"]["reviewCount"]
-                recipe_yield = dict["recipeYield"][1]
-                nutrition = dict["nutrition"]
+                recipe_yield = dic["recipeYield"][1]
 
-            rating = dict["aggregateRating"]["ratingValue"]
-            recipe_name = dict["name"]
-            cuisine_type = dict["recipeCuisine"]
-            recipe_category = dict["recipeCategory"]
-            ingredients = dict["recipeIngredient"]
-            cook_time = dict["cookTime"]
-
-            date_published = dict["datePublished"]
+            recipe_name = dic["name"]
+            cuisine_type = dic["recipeCuisine"]
+            recipe_category = dic["recipeCategory"]
+            ingredients = dic["recipeIngredient"]
+            cook_time = dic["cookTime"]
+            date_published = dic["datePublished"]
 
 
 
-            stepsList = dict["recipeInstructions"]
+            stepsList = dic["recipeInstructions"]
             instructions = []
 
             for step in stepsList:
@@ -188,30 +192,147 @@ def parse_other(soup, urlType):
         "instructions": instructions,
         "date": date_published,
         "site_name": site_name,
-        "nutrition": nutrition
-
+        "nutrition": nutrition,
+        "userliked": "false"
     }
 
     return return_dictionary
-    
+
+
+
+def parse_from_database(recipe_obj):
+    # All the data from the database. ingredientsStr and instructionsStr needs to be put into an array of stringss, nutritionStr needs to be put in a dictionary
+    ingredientsStr = recipe_obj.ingredients
+    instructionsStr = recipe_obj.instructions
+    nutritionStr = recipe_obj.nutrition
+
+    instructionArr = []
+
+    instructionSplit = instructionsStr.split("---")
+    for instruction in instructionSplit:
+        instruction = instruction.strip()
+        if instruction != "":
+            instructionArr.append(instruction)
+
+    ingredientArr = []
+    ingredientSplit = ingredientsStr.split("---")
+    for ingredient in ingredientSplit:
+        ingredient = ingredient.strip()
+        if ingredient != "":
+            ingredientArr.append(ingredient)
+
+    nutritionDict = {}
+    nutritionSplit = nutritionStr.split("---")
+    for nutrition in nutritionSplit:
+        nutrition = nutrition.strip()
+        if nutrition != "":
+            nutritionBites = nutrition.split(":")
+            nutritionDict[nutritionBites[0]] = nutritionBites[1]
+
+    return_dictionary = {
+        "author": recipe_obj.author,
+        "name": recipe_obj.name,
+        "cuisine": recipe_obj.cuisine,
+        "category": recipe_obj.category,
+        "ingredients": ingredientArr,
+        "cook_time": recipe_obj.cook_time,
+        "rating": recipe_obj.rating,
+        "reviews": recipe_obj.reviews,
+        "yield": recipe_obj.yield_col,
+        "instructions": instructionArr,
+        "date": recipe_obj.date,
+        "site_name": recipe_obj.site_name,
+        "nutrition": nutrition,
+        "userliked": "false"
+    }
+
+    return return_dictionary
+
+
+
+def save_to_database(data_dict, url):
+
+    ingredients = data_dict["ingredients"]
+    ingredientStr = ""
+    for ingredient in ingredients:
+        ingredientStr = ingredientStr + "---" + str(ingredient)
+
+    instructions = data_dict["instructions"]
+    instructionStr = ""
+    for instruction in instructions:
+        instructionStr = instructionStr + "---" + str(instruction)
+
+    nutrition = data_dict["nutrition"]
+    nutritionStr = ""
+    for key, value in nutrition.items():
+        nutritionStr = nutritionStr + "---" + str(key) +":" + str(value)
+
+    newrecipe = Recipes(
+        author = data_dict["author"],
+        name = data_dict["name"],
+        cuisine = data_dict["cuisine"],
+        category = data_dict["category"],
+        ingredients = ingredientStr,
+        cook_time = data_dict["cook_time"],
+        rating = data_dict["rating"],
+        reviews = data_dict["reviews"],
+        yield_col = data_dict["yield"],
+        instructions = instructionStr,
+        date = data_dict["date"],
+        site_name = data_dict["site_name"],
+        nutrition = nutritionStr,
+        url = url
+    )
+    database.session.add(newrecipe)
+    database.session.commit()
+
 
 @app.route('/parse-recipe', methods=['POST'])
 def run_script():
     url = request.json["url"]
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
-    page = requests.get(url, headers=headers)
-    soup = BeautifulSoup(page.text, 'html.parser')
+    username = request.json["username"]
+    recipe = database.session.scalars(database.select(Recipes).filter_by(url=url)).one_or_none()
+    return_dictionary = {}
+    
+    #First, check if recipe is already in the database
+    if not recipe is None:
+        # If it is we parse it from the database
+        return_dictionary = parse_from_database(recipe)
+        recipeID = recipe.recipeID
+        # Then we check to see if the user is logged in
+        if username != "N/A":
+            user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+            savedrecipes = user.savedrecipes
+            savedSplit = savedrecipes.split("---")
+            for saved in savedSplit:
+                saved = saved.strip()
+                if saved != "":
+                    savedInt = int(saved)
+                    if savedInt == recipeID:
+                        return_dictionary["userLiked"] = "true"
+    else: 
+        # If it isn't we parse it from the website
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
+        page = requests.get(url, headers=headers)
+        soup = BeautifulSoup(page.text, 'html.parser')
 
-    if "allrecipes" in url:
-        return_dictionary = parse_allrecipes(soup)
-    elif "modernhoney" in url:
-        return_dictionary = parse_other(soup, "modernhoney")
-    else:
-        return_dictionary = parse_other(soup, "pinchofyum")
+        json_script_tag = soup.find('script', type='application/ld+json')
+        json_string = json_script_tag.string
+        json_data = json.loads(json_string)
 
-    return_dictionary["name"] = return_dictionary["name"].replace("&#39;", "'")
+        if "allrecipes" in url:
+            return_dictionary = parse_allrecipes(json_data)
+        elif "modernhoney" in url:
+            return_dictionary = parse_other(json_data, "modernhoney")
+        else:
+            return_dictionary = parse_other(json_data, "pinchofyum")
+
+        return_dictionary["name"] = return_dictionary["name"].replace("&#39;", "'")
+
+        save_to_database(return_dictionary, url)
 
     return return_dictionary
+
 
 
 @app.route('/login', methods=['POST'])
@@ -283,6 +404,8 @@ def signup_script():
 
     return {"message": message, "userid": userid}
 
+
+
 @app.route('/save-recipe', methods=['POST'])
 def save_recipe():
     # The usernamed and userid of the user that will have a recipe added to it
@@ -306,87 +429,28 @@ def save_recipe():
     # savedrecipes is the string that holds the users' current saved recipes string
     savedrecipes = user.savedrecipes
 
-    # If the recipe already exists in the database
-    if not recipe is None:
-        # recipeid is set to the unique id of the recipe
-        recipeid = recipe.recipeID
+    # recipeid is set to the unique id of the recipe
+    recipeid = recipe.recipeID
 
-        # If the user already has saved recipes
-        if not savedrecipes is None:
-            # We split up the recipe ids' in the string and iterate through them, where curID is the current id from the string that we are on
-            slices = savedrecipes.split("--")
-            for bite in slices:
-                bite = bite.trim()
-                curID = int(bite)
-                # If curID is equal to the recipeid we are looking for, that means the user has already saved this recipe. The message is set and doublesave is set to true
-                if curID == recipeid:
-                    message = saveRecipeCodes["DOUBLESAVE"]
-                    doublesave = True
-                    break
-            # If doublesave isn't true, we append the recipeid to the end of the users' current savedrecipes string and store it in finalsaverecipes. The message is success
-            if not doublesave:
-                finalsaverecipes = savedrecipes + "--" + str(recipeid)
-                message = saveRecipeCodes["SUCCESS"]
-        # If savedrecipes is empty, finalsaverecipes becomes just this recipeid, as it is the only recipe the user has saved.
-        else:
-            finalsaverecipes = str(recipeid)
+    # If the user already has saved recipes
+    if not savedrecipes is None:
+        # We split up the recipe ids' in the string and iterate through them, where curID is the current id from the string that we are on
+        slices = savedrecipes.split("--")
+        for bite in slices:
+            bite = bite.strip()
+            curID = int(bite)
+            # If curID is equal to the recipeid we are looking for, that means the user has already saved this recipe. The message is set and doublesave is set to true
+            if curID == recipeid:
+                message = saveRecipeCodes["DOUBLESAVE"]
+                doublesave = True
+                break
+        # If doublesave isn't true, we append the recipeid to the end of the users' current savedrecipes string and store it in finalsaverecipes. The message is success
+        if not doublesave:
+            finalsaverecipes = savedrecipes + "--" + str(recipeid)
             message = saveRecipeCodes["SUCCESS"]
-    # If the recipe is None, that means it is not in the database and we need to add it.
+    # If savedrecipes is empty, finalsaverecipes becomes just this recipeid, as it is the only recipe the user has saved.
     else:
-        # cuisine and category are initalized
-        cuisine = request.json["cuisine"]
-        cuisineStr = cuisine[0]
-        category = request.json["category"]
-        categoryStr = category[0]
-
-        # ingredients, instructions, and nutrition are formatted into strings to be stored
-        ingredients = request.json["ingredients"]
-        ingredientStr = ""
-        for ingredient in ingredients:
-           ingredientStr = ingredientStr + "---" + str(ingredient)
-
-        instructions = request.json["instructions"]
-        instructionStr = ""
-        for instruction in instructions:
-            instructionStr = instructionStr + "---" + str(instruction)
-
-        nutrition = request.json["nutrition"]
-        nutritionStr = ""
-        for key, value in nutrition.items():
-            nutritionStr = nutritionStr + "---" + str(key) +":" + str(value)
-
-        # Then the new recipe object is made, and the object is added to the database and committed
-        newrecipe = Recipes(
-            author = request.json["author"],
-            name = request.json["name"],
-            cuisine = cuisineStr,
-            category = categoryStr,
-            ingredients = ingredientStr,
-            cook_time = request.json["cook_time"],
-            rating = request.json["rating"],
-            reviews = request.json["reviews"],
-            yield_col = request.json["yield"],
-            instructions = instructionStr,
-            date = request.json["date"],
-            site_name = request.json["site_name"],
-            nutrition = nutritionStr,
-            url = request.json["url"]
-        )
-        database.session.add(newrecipe)
-        database.session.commit()
-
-        # newdbrecipe is then retrieved back from the database so we can access its unique recipe id
-        newdbrecipe = database.session.scalars(database.select(Recipes).filter_by(url=url, name=recipename)).one_or_none()
-        newrecipeid = newdbrecipe.recipeID
-
-        # If the user already has saved recipes, we append the newrecipeid to the current savedrecipes string and store it in final recipes. If not
-        # we add it as the only thing in the finalsaverecipes string
-        if not savedrecipes is None:
-            finalsaverecipes = savedrecipes + "---" + str(newrecipeid)
-        else:
-            finalsaverecipes = str(newrecipeid)
-
-        # The message is success
+        finalsaverecipes = str(recipeid)
         message = saveRecipeCodes["SUCCESS"]
 
     # If we have a message of succes we can go ahead and change the users' savedrecipes string to our finalsaverecipes and commit that to the database
