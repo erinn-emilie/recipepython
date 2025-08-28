@@ -105,8 +105,6 @@ def find_right_dict_and_key(dictionary, primKey, keyList):
 
 
 
-
-
 def parse_allrecipes(json_data):
     json_dict = json_data[0]
 
@@ -116,6 +114,7 @@ def parse_allrecipes(json_data):
         instructions = []
 
         for step in stepsList:
+            step = step.strip()
             instructions.append(step["text"])
 
         return_dictionary = {
@@ -232,6 +231,7 @@ def parse_from_database(recipe_obj):
         "date": recipe_obj.date,
         "site_name": recipe_obj.site_name,
         "nutrition": nutrition,
+        "url": recipe_obj.url,
         "userliked": "false"
     }
 
@@ -300,6 +300,7 @@ def run_script():
                     savedInt = int(saved)
                     if savedInt == recipeID:
                         return_dictionary["userLiked"] = "true"
+                        break
 
         return return_dictionary
 
@@ -452,8 +453,70 @@ def save_recipe():
         
 
         
+@app.route('/fetch-all-recipes', methods=['POST'])
+def fetch_all_recipes():
+    offset = request.json["offset"]
+    username = request.json["username"]
+
+    all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).offset(offset).limit(30)).all()
+    return_list = []
+
+    if username != "":
+        user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+        savedrecipes = user.savedrecipes
+        savedSplit = savedrecipes.split("---")
+        savedInts = []
+
+        for saved in savedSplit:
+            savedInts.append(int(saved.strip()))
+
+        for recipe in all_recipes:
+            recipe_dict = parse_from_database(recipe)
+            if recipe.recipeID in savedInts: 
+                recipe_dict["userliked"] = "true"
+            return_list.append(recipe_dict)
+    else:
+        for recipe in all_recipes:
+            return_list.append(parse_from_database(recipe))
 
 
+    return return_list
+
+
+@app.route('/fetch-certain-recipes', methods=['POST'])
+def fetch_certain_recipes():
+    offset = request.json["offset"]
+    username = request.json["username"]
+    key = request.json["key"]
+    col = request.json["col"]
+
+    if col == "name":
+        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.name.icontains(key)).offset(offset).limit(30)).all()
+    if col == "author":
+        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.author.icontains(key)).offset(offset).limit(30)).all()
+    if col == "site_name":
+        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.site_name.icontains(key)).offset(offset).limit(30)).all()
+    return_list = []
+
+    if username != "":
+        user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+        savedrecipes = user.savedrecipes
+        savedSplit = savedrecipes.split("---")
+        savedInts = []
+
+        for saved in savedSplit:
+            savedInts.append(int(saved.strip()))
+
+        for recipe in all_recipes:
+            recipe_dict = parse_from_database(recipe)
+            if recipe.recipeID in savedInts: 
+                recipe_dict["userliked"] = "true"
+            return_list.append(recipe_dict)
+    else:
+        for recipe in all_recipes:
+            return_list.append(parse_from_database(recipe))
+
+    return return_list
 
 
 
