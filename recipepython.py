@@ -59,8 +59,6 @@ class Users(database.Model):
     lastname: Mapped[str]
     lastname: Mapped[str]
     dateofacccreation: Mapped[date] = mapped_column(DATE, default=date.today)
-    savedrecipes: Mapped[str]
-    savedingredients: Mapped[str]
 
 class Recipes(database.Model):
     recipeID: Mapped[int] = mapped_column(primary_key=True)
@@ -78,6 +76,12 @@ class Recipes(database.Model):
     site_name: Mapped[str]
     nutrition: Mapped[str]
     url: Mapped[str]
+
+class Pages(database.Model):
+    pageID: Mapped[int] = mapped_column(primary_key=True)
+    fk_userID: Mapped[int]
+    fk_recipeID: Mapped[int]
+    notes: Mapped[str]
 
 
 def check_key(dictionary, key):
@@ -114,7 +118,7 @@ def parse_allrecipes(json_data):
         instructions = []
 
         for step in stepsList:
-            step = step.strip()
+            step["text"] = step["text"].strip()
             instructions.append(step["text"])
 
         return_dictionary = {
@@ -131,7 +135,8 @@ def parse_allrecipes(json_data):
             "date": check_key(json_dict,"datePublished"),
             "site_name": check_keys(json_dict,"publisher","name"),
             "nutrition": check_key(json_dict,"nutrition"),
-            "userliked": "false"
+            "userliked": "false",
+            "usernotes": ""
         }
     else:
         return_dictionary = {"message": "FAILURE"}
@@ -179,7 +184,8 @@ def parse_other(json_data):
                     "date": check_key(dic,"datePublished"),
                     "site_name": site_name,
                     "nutrition": check_key(dic,"nutrition"),
-                    "userliked": "false"
+                    "userliked": "false",
+                    "usernotes": ""
                 }
             else:
                 return_dictionary = {"message": "FAILURE"}
@@ -232,7 +238,8 @@ def parse_from_database(recipe_obj):
         "site_name": recipe_obj.site_name,
         "nutrition": nutrition,
         "url": recipe_obj.url,
-        "userliked": "false"
+        "userliked": "false",
+        "usernotes": ""
     }
 
     return return_dictionary
@@ -292,15 +299,10 @@ def run_script():
         # Then we check to see if the user is logged in
         if username != "N/A":
             user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-            savedrecipes = user.savedrecipes
-            savedSplit = savedrecipes.split("---")
-            for saved in savedSplit:
-                saved = saved.strip()
-                if saved != "":
-                    savedInt = int(saved)
-                    if savedInt == recipeID:
-                        return_dictionary["userLiked"] = "true"
-                        break
+            page = database.session.scalars(database.select(Pages).filter_by(fk_userID=user.userID, fk_recipeID=recipeID)).one_or_none()
+            if not page is None:
+                return_dictionary["userliked"] = "true"
+                return_dictionary["notes"] = page.notes
 
         return return_dictionary
 
@@ -360,6 +362,9 @@ def login_script():
 
     return {"message": message, "userid": userid}
 
+
+
+
 @app.route('/signup', methods=['POST'])
 def signup_script():
     username = request.json["username"]
@@ -407,43 +412,28 @@ def signup_script():
 
 @app.route('/save-recipe', methods=['POST'])
 def save_recipe():
-    # The usernamed and userid of the user that will have a recipe added to it
     username = request.json["username"]
     userid = request.json["userid"]
-    # The url and naem of the recipe that will be added to the database and/or user
+
     url = request.json["url"]
     recipename = request.json["name"]
 
-    # Initalizing some helper variables, message will be returned to client, initially there is no message
-    # doublesave indicated that the user has already saved this recipe, initially it is false
-    # finalsaverecipes is a placeholder for the string that will eventually hold all the recipe id's that the user has saved
     message = saveRecipeCodes["FAILURE"]
-    finalsaverecipes = ""
 
     # user and recipe are the database objects that represent the relevent user and recipe
     user = database.session.scalars(database.select(Users).filter_by(userID=userid, username=username)).one_or_none()
     recipe = database.session.scalars(database.select(Recipes).filter_by(url=url, name=recipename)).one_or_none()
 
     if not recipe is None and user is not None:
-        # savedrecipes is the string that holds the users' current saved recipes string
-        savedrecipes = user.savedrecipes
 
-        # recipeid is set to the unique id of the recipe
-        recipeid = recipe.recipeID
-
-        # If the user already has saved recipes
-        if not savedrecipes is None:
-            finalsaverecipes = savedrecipes + "---" + str(recipeid)
-            message = saveRecipeCodes["SUCCESS"]
-        # If savedrecipes is empty, finalsaverecipes becomes just this recipeid, as it is the only recipe the user has saved.
-        else:
-            finalsaverecipes = str(recipeid)
-            message = saveRecipeCodes["SUCCESS"]
-
-        # If we have a message of succes we can go ahead and change the users' savedrecipes string to our finalsaverecipes and commit that to the database
-        if message == saveRecipeCodes["SUCCESS"]:
-            user.savedrecipes = finalsaverecipes
-            database.session.commit()
+        page = Pages(
+            fk_userID = user.userID,
+            fk_recipeID = recipe.recipeID,
+            notes = "",
+        )
+        database.session.add(page)
+        database.session.commit()    
+        message = saveRecipeCodes["SUCCESS"]
     else:
         message = saveRecipeCodes["FAILURE"]
 
@@ -463,12 +453,12 @@ def fetch_all_recipes():
 
     if username != "":
         user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-        savedrecipes = user.savedrecipes
-        savedSplit = savedrecipes.split("---")
-        savedInts = []
+        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID = user.userID)).all()
 
-        for saved in savedSplit:
-            savedInts.append(int(saved.strip()))
+        savedInts = []
+        for page in pages:
+            savedInts.append(page.fk_recipeID)
+
 
         for recipe in all_recipes:
             recipe_dict = parse_from_database(recipe)
@@ -500,12 +490,12 @@ def fetch_certain_recipes():
 
     if username != "":
         user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-        savedrecipes = user.savedrecipes
-        savedSplit = savedrecipes.split("---")
-        savedInts = []
+        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID = user.userID)).all()
 
-        for saved in savedSplit:
-            savedInts.append(int(saved.strip()))
+        savedInts = []
+        for page in pages:
+            savedInts.append(page.fk_recipeID)
+
 
         for recipe in all_recipes:
             recipe_dict = parse_from_database(recipe)
@@ -517,6 +507,31 @@ def fetch_certain_recipes():
             return_list.append(parse_from_database(recipe))
 
     return return_list
+
+
+@app.route('/fetch-saved-recipes', methods=['POST'])
+def fetch_saved_recipes():
+    username = request.json["username"]
+
+    user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+    return_list = []
+    count = 0
+
+    if not user is None:
+        userID = user.userID
+        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID=userID)).all()
+        if not pages is None:
+            count = Pages.query.filter_by(fk_userID=userID).count()
+            for page in pages:
+                recipeID = page.fk_recipeID
+                notes = page.notes
+                recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID = recipeID)).one_or_none()
+                recipe_dict = parse_from_database(recipe)
+                recipe_dict["userliked"] = "true"
+                recipe_dict["usernotes"] = notes
+                return_list.append(recipe_dict)
+
+    return {"data": return_list, "count": count}
 
 
 
