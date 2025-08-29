@@ -76,6 +76,8 @@ class Recipes(database.Model):
     site_name: Mapped[str]
     nutrition: Mapped[str]
     url: Mapped[str]
+    img_url: Mapped[str]
+    weighted_rating: Mapped[float]
 
 class Pages(database.Model):
     pageID: Mapped[int] = mapped_column(primary_key=True)
@@ -135,6 +137,7 @@ def parse_allrecipes(json_data):
             "date": check_key(json_dict,"datePublished"),
             "site_name": check_keys(json_dict,"publisher","name"),
             "nutrition": check_key(json_dict,"nutrition"),
+            "weighted_rating": "0",
             "userliked": "false",
             "usernotes": ""
         }
@@ -171,7 +174,7 @@ def parse_other(json_data):
                         instructions.append(step["text"])
                                
                 return_dictionary = {
-                    "author": find_right_key(dic["author"], ["@id", "name"]),
+                    "author": find_right_key(dic["author"], ["name", "@id"]),
                     "name": check_key(dic,"name"),
                     "cuisine": check_key(dic,"recipeCuisine"),
                     "category": check_key(dic,"recipeCategory"),
@@ -184,6 +187,7 @@ def parse_other(json_data):
                     "date": check_key(dic,"datePublished"),
                     "site_name": site_name,
                     "nutrition": check_key(dic,"nutrition"),
+                    "weighted_rating": "0",
                     "userliked": "false",
                     "usernotes": ""
                 }
@@ -238,8 +242,10 @@ def parse_from_database(recipe_obj):
         "site_name": recipe_obj.site_name,
         "nutrition": nutrition,
         "url": recipe_obj.url,
+        "img_url": recipe_obj.img_url,
         "userliked": "false",
-        "usernotes": ""
+        "usernotes": "",
+        "weighted_rating": recipe_obj.weighted_rating
     }
 
     return return_dictionary
@@ -278,7 +284,9 @@ def save_to_database(data_dict, url):
         date = data_dict["date"],
         site_name = data_dict["site_name"],
         nutrition = nutritionStr,
-        url = url
+        url = url,
+        img_url = "",
+        weighted_rating = data_dict["weighted_rating"]
     )
     database.session.add(newrecipe)
     database.session.commit()
@@ -327,6 +335,12 @@ def run_script():
             message = check_key(return_dictionary, "message")
             if message == "":
                 return_dictionary["name"] = return_dictionary["name"].replace("&#39;", "'")
+
+                if return_dictionary["rating"] != "" and return_dictionary["reviews"] != "":
+                    rating = round(float(return_dictionary["rating"]), 2)
+                    reviews = round(float(return_dictionary["reviews"]), 2)
+                    return_dictionary["weighted_rating"] = str(round(rating*reviews, 2))
+
                 save_to_database(return_dictionary, url)
         
             return return_dictionary
@@ -448,7 +462,7 @@ def fetch_all_recipes():
     offset = request.json["offset"]
     username = request.json["username"]
 
-    all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).offset(offset).limit(30)).all()
+    all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).offset(offset).limit(30)).all()
     return_list = []
 
     if username != "":
@@ -511,6 +525,32 @@ def fetch_certain_recipes():
 
 @app.route('/fetch-saved-recipes', methods=['POST'])
 def fetch_saved_recipes():
+    username = request.json["username"]
+
+    user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+    return_list = []
+    count = 0
+
+    if not user is None:
+        userID = user.userID
+        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID=userID)).all()
+        if not pages is None:
+            count = Pages.query.filter_by(fk_userID=userID).count()
+            for page in pages:
+                recipeID = page.fk_recipeID
+                notes = page.notes
+                recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID = recipeID)).one_or_none()
+                recipe_dict = parse_from_database(recipe)
+                recipe_dict["userliked"] = "true"
+                recipe_dict["usernotes"] = notes
+                return_list.append(recipe_dict)
+
+    return {"data": return_list, "count": count}
+
+@app.route('/fetch-certain-saved-recipes', methods=['POST'])
+def fetch_certain_saved_recipes():
+
+    #HMMMMMMMMMMMMMMMMM
     username = request.json["username"]
 
     user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
