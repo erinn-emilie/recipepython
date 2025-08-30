@@ -1,4 +1,3 @@
-####
 from ast import parse
 from re import S
 from flask import Flask, jsonify, request
@@ -7,11 +6,14 @@ from flask_cors import CORS
 from bs4 import BeautifulSoup
 import json
 import requests
-from sqlalchemy import Integer, String, DATE
+from sqlalchemy import Integer, String, DATE, Numeric, cast
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import date, datetime
 import bcrypt
 import re
+import urllib
+import random
+
 
 
 
@@ -79,11 +81,10 @@ class Recipes(database.Model):
     img_url: Mapped[str]
     weighted_rating: Mapped[float]
 
-class Pages(database.Model):
-    pageID: Mapped[int] = mapped_column(primary_key=True)
+class Recipebookpages(database.Model):
+    recipepageID: Mapped[int] = mapped_column(primary_key=True)
     fk_userID: Mapped[int]
     fk_recipeID: Mapped[int]
-    notes: Mapped[str]
 
 
 def check_key(dictionary, key):
@@ -105,9 +106,42 @@ def find_right_key(dictionary, keyList):
 
 def find_right_dict_and_key(dictionary, primKey, keyList):
     if primKey in dictionary:
-        find_right_key(dictionary[primKey], keyList)
+        return find_right_key(dictionary[primKey], keyList)
     else:
         return ""
+
+
+def save_image(image_url, image_name):            
+
+    save_path = "C:/Users/Erinn/source/repos/recipewebsite/public/recipeimages/" + image_name
+
+    opener = urllib.request.build_opener()
+    opener.addheaders = [('User-Agent', 'MyApp/1.0')]
+    urllib.request.install_opener(opener)
+    urllib.request.urlretrieve(image_url, save_path)
+
+    return "/public/recipeimages/" + image_name
+
+
+def make_str_from_list(list_obj, seperator):
+    return_str = ""
+    print(list_obj)
+    for idx, item in enumerate(list_obj):
+        if idx == 0:
+            return_str = str(item)
+        else:
+            return_str = return_str + seperator + str(item)
+
+    return return_str
+
+def make_list_from_str(str, seperator):
+    split = str.split(seperator)
+    return_list = []
+    for bit in split:
+        bit = bit.strip()
+        if bit != "":
+            return_list.append(bit)
+    return return_list
 
 
 
@@ -116,30 +150,62 @@ def parse_allrecipes(json_data):
 
     stepsList = check_key(json_dict,"recipeInstructions")
     ingredients = check_key(json_dict,"recipeIngredient")
+
+
     if stepsList != "" and ingredients != "":
         instructions = []
+        image_web_url = json_dict["image"]["url"]
+        img_url = ""
+
+        recipeName = check_key(json_dict,"headline").replace("&#39;", "'")
+        author = json_dict["author"][0]["name"]
+
+        if image_web_url != "" and not image_web_url is None:
+                code = random.randint(10000, 99999)
+                image_name =  recipeName + "_" + author + "_" + str(code) + ".jpg"
+                img_url = save_image(image_web_url,image_name)
+
 
         for step in stepsList:
             step["text"] = step["text"].strip()
             instructions.append(step["text"])
 
+        cuisine = check_key(json_dict,"recipeCuisine")
+        cuisineStr = make_str_from_list(cuisine, "-")
+
+        category = check_key(json_dict,"recipeCategory")
+        categoryStr = make_str_from_list(category, "-")
+
+        recipe_yield = check_key(json_dict,"recipeYield")
+        yield_field = ""
+        if isinstance(recipe_yield, list):
+            if len(recipe_yield) == 1:
+                yield_field = recipe_yield[0]
+            else:
+                yield_field = recipe_yield[1]
+        else:
+            yield_field = recipe_yield
+
+        cooktime = check_key(json_dict,"cookTime")
+        cooktime = cooktime.replace("PT", "")
+
         return_dictionary = {
-            "author": json_dict["author"][0]["name"],
-            "name": check_key(json_dict,"headline"),
-            "cuisine": check_key(json_dict,"recipeCuisine"),
-            "category": check_key(json_dict,"recipeCategory"),
+            "author": author,
+            "name": recipeName,
+            "cuisine": cuisineStr,
+            "category": categoryStr,
             "ingredients": ingredients,
-            "cook_time": check_key(json_dict,"cookTime"),
+            "cook_time": cooktime,
             "rating": check_keys(json_dict,"aggregateRating", "ratingValue"),
             "reviews": check_keys(json_dict,"aggregateRating","ratingCount"),
-            "yield": check_key(json_dict,"recipeYield"),
+            "yield": yield_field,
             "instructions": instructions,
             "date": check_key(json_dict,"datePublished"),
             "site_name": check_keys(json_dict,"publisher","name"),
             "nutrition": check_key(json_dict,"nutrition"),
             "weighted_rating": "0",
+            "img_url": img_url,
             "userliked": "false",
-            "usernotes": ""
         }
     else:
         return_dictionary = {"message": "FAILURE"}
@@ -171,13 +237,20 @@ def parse_other(json_data):
                 instructions = []
                 for step in stepsList:
                     if isinstance(step, dict) and check_key(step, "text") != "":
-                        instructions.append(step["text"])
+                        string = step["text"].replace("&#39;", "'")
+                        instructions.append(string)
+
+                cuisine = check_key(json_dict,"recipeCuisine")
+                cuisineStr = make_str_from_list(cuisine, "-")
+
+                category = check_key(json_dict,"recipeCategory")
+                categoryStr = make_str_from_list(category, "-")
                                
                 return_dictionary = {
                     "author": find_right_key(dic["author"], ["name", "@id"]),
                     "name": check_key(dic,"name"),
-                    "cuisine": check_key(dic,"recipeCuisine"),
-                    "category": check_key(dic,"recipeCategory"),
+                    "cuisine": cuisineStr,
+                    "category": categoryStr,
                     "ingredients": ingredients,
                     "cook_time": check_key(dic,"cookTime"),
                     "rating": find_right_dict_and_key(dic,"aggregateRating", ["ratingValue"]),
@@ -189,7 +262,7 @@ def parse_other(json_data):
                     "nutrition": check_key(dic,"nutrition"),
                     "weighted_rating": "0",
                     "userliked": "false",
-                    "usernotes": ""
+                    "img_url": ""
                 }
             else:
                 return_dictionary = {"message": "FAILURE"}
@@ -204,20 +277,8 @@ def parse_from_database(recipe_obj):
     instructionsStr = recipe_obj.instructions
     nutritionStr = recipe_obj.nutrition
 
-    instructionArr = []
-
-    instructionSplit = instructionsStr.split("---")
-    for instruction in instructionSplit:
-        instruction = instruction.strip()
-        if instruction != "":
-            instructionArr.append(instruction)
-
-    ingredientArr = []
-    ingredientSplit = ingredientsStr.split("---")
-    for ingredient in ingredientSplit:
-        ingredient = ingredient.strip()
-        if ingredient != "":
-            ingredientArr.append(ingredient)
+    instructionArr = make_list_from_str(instructionsStr, "---")
+    ingredientArr = make_list_from_str(ingredientsStr, "---")
 
     nutritionDict = {}
     nutritionSplit = nutritionStr.split("---")
@@ -244,7 +305,6 @@ def parse_from_database(recipe_obj):
         "url": recipe_obj.url,
         "img_url": recipe_obj.img_url,
         "userliked": "false",
-        "usernotes": "",
         "weighted_rating": recipe_obj.weighted_rating
     }
 
@@ -255,14 +315,11 @@ def parse_from_database(recipe_obj):
 def save_to_database(data_dict, url):
 
     ingredients = data_dict["ingredients"]
-    ingredientStr = ""
-    for ingredient in ingredients:
-        ingredientStr = ingredientStr + "---" + str(ingredient)
+    ingredientStr = make_str_from_list(ingredients, "---")
+
 
     instructions = data_dict["instructions"]
-    instructionStr = ""
-    for instruction in instructions:
-        instructionStr = instructionStr + "---" + str(instruction)
+    instructionStr = make_str_from_list(instructions, "---")
 
     nutrition = data_dict["nutrition"]
     nutritionStr = ""
@@ -277,16 +334,16 @@ def save_to_database(data_dict, url):
         category = data_dict["category"],
         ingredients = ingredientStr,
         cook_time = data_dict["cook_time"],
-        rating = data_dict["rating"],
-        reviews = data_dict["reviews"],
+        rating = cast(data_dict["rating"], Numeric),
+        reviews = cast(data_dict["reviews"],Numeric),
         yield_col = data_dict["yield"],
         instructions = instructionStr,
         date = data_dict["date"],
         site_name = data_dict["site_name"],
         nutrition = nutritionStr,
         url = url,
-        img_url = "",
-        weighted_rating = data_dict["weighted_rating"]
+        img_url = data_dict["img_url"],
+        weighted_rating = cast(data_dict["weighted_rating"], Numeric)
     )
     database.session.add(newrecipe)
     database.session.commit()
@@ -307,10 +364,9 @@ def run_script():
         # Then we check to see if the user is logged in
         if username != "N/A":
             user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-            page = database.session.scalars(database.select(Pages).filter_by(fk_userID=user.userID, fk_recipeID=recipeID)).one_or_none()
+            page = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID, fk_recipeID=recipeID)).one_or_none()
             if not page is None:
                 return_dictionary["userliked"] = "true"
-                return_dictionary["notes"] = page.notes
 
         return return_dictionary
 
@@ -336,7 +392,7 @@ def run_script():
             if message == "":
                 return_dictionary["name"] = return_dictionary["name"].replace("&#39;", "'")
 
-                if return_dictionary["rating"] != "" and return_dictionary["reviews"] != "":
+                if (return_dictionary["rating"] != "" and not return_dictionary["rating"] is None ) and (return_dictionary["reviews"] != "" and not return_dictionary["reviews"] is None ):
                     rating = round(float(return_dictionary["rating"]), 2)
                     reviews = round(float(return_dictionary["reviews"]), 2)
                     return_dictionary["weighted_rating"] = str(round(rating*reviews, 2))
@@ -440,10 +496,9 @@ def save_recipe():
 
     if not recipe is None and user is not None:
 
-        page = Pages(
+        page = Recipebookpages(
             fk_userID = user.userID,
             fk_recipeID = recipe.recipeID,
-            notes = "",
         )
         database.session.add(page)
         database.session.commit()    
@@ -457,121 +512,101 @@ def save_recipe():
         
 
         
-@app.route('/fetch-all-recipes', methods=['POST'])
-def fetch_all_recipes():
-    offset = request.json["offset"]
-    username = request.json["username"]
-
-    all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).offset(offset).limit(30)).all()
-    return_list = []
-
-    if username != "":
-        user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID = user.userID)).all()
-
-        savedInts = []
-        for page in pages:
-            savedInts.append(page.fk_recipeID)
-
-
-        for recipe in all_recipes:
-            recipe_dict = parse_from_database(recipe)
-            if recipe.recipeID in savedInts: 
-                recipe_dict["userliked"] = "true"
-            return_list.append(recipe_dict)
-    else:
-        for recipe in all_recipes:
-            return_list.append(parse_from_database(recipe))
-
-
-    return return_list
-
-
-@app.route('/fetch-certain-recipes', methods=['POST'])
-def fetch_certain_recipes():
-    offset = request.json["offset"]
-    username = request.json["username"]
+@app.route('/fetch-data', methods=['POST'])
+def fetch_data():
+    column = request.json["column"]
     key = request.json["key"]
-    col = request.json["col"]
+    filterDict = request.json["filter"]
+    offset = request.json["offset"]
+    savedRecipesOnly = request.json["savedRecipesOnly"]
+    username = request.json["username"]
 
-    if col == "name":
-        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.name.icontains(key)).offset(offset).limit(30)).all()
-    if col == "author":
-        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.author.icontains(key)).offset(offset).limit(30)).all()
-    if col == "site_name":
-        all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.recipeID).filter(Recipes.site_name.icontains(key)).offset(offset).limit(30)).all()
+    print(savedRecipesOnly)
+
+    return_dictionary = {}
     return_list = []
+    
+    if savedRecipesOnly == "true":
+        if username != "":
+            user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+            pages = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID)).all()
+            iteration = 0
+            if not pages is None:
+                for page in pages:
+                    recipeID = page.fk_recipeID
+                    if key == "":
+                        recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID=recipeID)).one_or_none()
+                        iteration += 1
+                        if iteration > offset:
+                            dic = parse_from_database(recipe)
+                            dic["userliked"] = "true"
+                            return_list.append(dic)
+                        else:
+                            continue
+                    else:
+                        recipe = None
+                        if column == "name":
+                            recipe = database.session.scalars(database.select(Recipes).filter(Recipes.name.icontains(key)).filter_by(recipeID=recipeID)).one_or_none()
+                        if column == "author":
+                            recipe = database.session.scalars(database.select(Recipes).filter(Recipes.author.icontains(key)).filter_by(recipeID=recipeID)).one_or_none()
+                        if column == "site_name":
+                            recipe = database.session.scalars(database.select(Recipes).filter(Recipes.site_name.icontains(key)).filter_by(recipeID=recipeID)).one_or_none()
 
-    if username != "":
-        user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID = user.userID)).all()
+                        if not recipe is None:
+                            iteration += 1
+                            if iteration > offset:
+                                dic = parse_from_database(recipe)
+                                dic["userliked"] = "true"
+                                return_list.append(dic)
 
-        savedInts = []
-        for page in pages:
-            savedInts.append(page.fk_recipeID)
-
-
-        for recipe in all_recipes:
-            recipe_dict = parse_from_database(recipe)
-            if recipe.recipeID in savedInts: 
-                recipe_dict["userliked"] = "true"
-            return_list.append(recipe_dict)
+                            else:
+                                continue
     else:
-        for recipe in all_recipes:
-            return_list.append(parse_from_database(recipe))
+        all_recipes = None
+        if key == "":
+            all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).offset(offset).limit(30)).all()
+        else:
+            if column == "name":
+                all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).filter(Recipes.name.icontains(key)).offset(offset).limit(30)).all()
+            if column == "author":
+                all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).filter(Recipes.author.icontains(key)).offset(offset).limit(30)).all()
+            if column == "site_name":
+                all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).filter(Recipes.site_name.icontains(key)).offset(offset).limit(30)).all()
 
-    return return_list
+        if username != "":
+            user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+            for recipe in all_recipes:
+                dic = parse_from_database(recipe)
+                page = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID, fk_recipeID=recipe.recipeID)).one_or_none()
+                if not page is None:
+                    dic["userliked"] = "true"
+                return_list.append(dic)
+        else:
+            for recipe in all_recipes:
+                return_list.append(parse_from_database(recipe))
 
+    return {"list": return_list}
 
-@app.route('/fetch-saved-recipes', methods=['POST'])
-def fetch_saved_recipes():
+@app.route('/fetch-for-book', methods=['POST'])
+def fetch_for_book():
     username = request.json["username"]
 
     user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+    pages = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID)).all()
     return_list = []
-    count = 0
 
-    if not user is None:
-        userID = user.userID
-        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID=userID)).all()
-        if not pages is None:
-            count = Pages.query.filter_by(fk_userID=userID).count()
-            for page in pages:
-                recipeID = page.fk_recipeID
-                notes = page.notes
-                recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID = recipeID)).one_or_none()
-                recipe_dict = parse_from_database(recipe)
-                recipe_dict["userliked"] = "true"
-                recipe_dict["usernotes"] = notes
-                return_list.append(recipe_dict)
+    for page in pages:
+        recipeID = page.fk_recipeID
+        recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID=recipeID)).one_or_none()
+        dic = parse_from_database(recipe)
+        dic["userliked"] = "true"
+        return_list.append(dic)
 
-    return {"data": return_list, "count": count}
+    return {"list": return_list, "count": len(return_list)}
 
-@app.route('/fetch-certain-saved-recipes', methods=['POST'])
-def fetch_certain_saved_recipes():
 
-    #HMMMMMMMMMMMMMMMMM
-    username = request.json["username"]
 
-    user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-    return_list = []
-    count = 0
 
-    if not user is None:
-        userID = user.userID
-        pages = database.session.scalars(database.select(Pages).filter_by(fk_userID=userID)).all()
-        if not pages is None:
-            count = Pages.query.filter_by(fk_userID=userID).count()
-            for page in pages:
-                recipeID = page.fk_recipeID
-                notes = page.notes
-                recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID = recipeID)).one_or_none()
-                recipe_dict = parse_from_database(recipe)
-                recipe_dict["userliked"] = "true"
-                recipe_dict["usernotes"] = notes
-                return_list.append(recipe_dict)
-
-    return {"data": return_list, "count": count}
 
 
 
