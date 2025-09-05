@@ -52,6 +52,14 @@ badParseCodes = {
     "INVALURL": 0
 }
 
+addUserCodes = {
+    "INVALUSER": 0,
+    "FULLKITCHEN": 1,
+    "USERINKITCHEN": 2,
+    "SUCCESS": 3,
+    "FAILURE": 4
+}
+
 
 class Users(database.Model):
     userID: Mapped[int] = mapped_column(primary_key=True)
@@ -62,6 +70,8 @@ class Users(database.Model):
     lastname: Mapped[str]
     lastname: Mapped[str]
     dateofacccreation: Mapped[date] = mapped_column(DATE, default=date.today)
+    fk_kitchenID: Mapped[int]
+    emailverified: Mapped[str] = mapped_column(String, default="false")
 
 class Recipes(database.Model):
     recipeID: Mapped[int] = mapped_column(primary_key=True)
@@ -86,6 +96,27 @@ class Recipebookpages(database.Model):
     fk_userID: Mapped[int]
     fk_recipeID: Mapped[int]
 
+class KRBP(database.Model):
+    krbpID: Mapped[int] = mapped_column(primary_key=True)
+    fk_kitchenID: Mapped[int]
+    fk_recipeID: Mapped[int]
+
+class Kitchen(database.Model):
+    kitchenID: Mapped[int] = mapped_column(primary_key=True)
+    fk_primUser: Mapped[int]
+    fk_secUser1: Mapped[int]
+    fk_secUser2: Mapped[int]
+    fk_secUser3: Mapped[int]
+    fk_secUser4: Mapped[int]
+    fk_secUser5: Mapped[int]
+    num_users: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class Messages(database.Model):
+    messageID: Mapped[int] = mapped_column(primary_key=True)
+    senderID: Mapped[int]
+    recieverID: Mapped[int]
+    message: Mapped[str]
 
 def check_key(dictionary, key):
     if key in dictionary:
@@ -182,7 +213,7 @@ def parse_allrecipes(json_data):
             "site_name": check_keys(json_dict,"publisher","name"),
             "nutrition": check_key(json_dict,"nutrition"),
             "weighted_rating": "0",
-            "userliked": "false",
+            "savestate": "false",
         }
     else:
         return_dictionary = {"message": "FAILURE"}
@@ -254,7 +285,7 @@ def parse_other(json_data):
                     "site_name": site_name,
                     "nutrition": check_key(dic,"nutrition"),
                     "weighted_rating": "0",
-                    "userliked": "false",
+                    "savestate": "false",
                 }
             else:
                 return_dictionary = {"message": "FAILURE"}
@@ -300,7 +331,7 @@ def parse_from_database(recipe_obj):
         "site_name": recipe_obj.site_name,
         "nutrition": nutrition,
         "url": recipe_obj.url,
-        "userliked": "false",
+        "savestate": "false",
         "weighted_rating": recipe_obj.weighted_rating
     }
 
@@ -360,9 +391,16 @@ def run_script():
         # Then we check to see if the user is logged in
         if username != "N/A":
             user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
-            page = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID, fk_recipeID=recipeID)).one_or_none()
-            if not page is None:
-                return_dictionary["userliked"] = "true"
+            userpage = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID, fk_recipeID=recipeID)).one_or_none()
+            kitchenpage = database.session.scalars(database.select(KRBP).filter_by(fk_kitchenID=user.fk_kitchenID, fk_recipeID=recipeID)).one_or_none()
+
+            if not userpage is None and not kitchenpage is None:
+                return_dictionary["savestate"] = "user"
+            if userpage is None and not kitchenpage is None:
+                return_dictionary["savestate"] = "kitchen"
+            if userpage is None and kitchenpage is None:
+                return_dictionary["savestate"] = "none"
+
 
         return return_dictionary
 
@@ -414,6 +452,7 @@ def login_script():
     user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
     message = loginCodes["NOMESSAGE"]
     userid = -1
+    email = ""
 
     if user is None:
         message = loginCodes["INVALINFO"]
@@ -423,10 +462,11 @@ def login_script():
         if bcrypt.checkpw(password, hashbrown):
             message = loginCodes["SUCCESS"]
             userid = user.userID
+            email = user.email
         else:
             message = loginCodes["INVALINFO"]
 
-    return {"message": message, "userid": userid}
+    return {"message": message, "userid": userid, "email": email}
 
 
 
@@ -440,6 +480,7 @@ def signup_script():
 
     message = signupCodes["NOMESSAGE"]
     userid = -1
+    email: ""
 
     if password != retyped:
         message = signupCodes["PASSNOMATCH"]
@@ -461,18 +502,27 @@ def signup_script():
                     else:
                         salt = bcrypt.gensalt()
                         hashbrown = bcrypt.hashpw(password, salt)
+                        kitchen = Kitchen()
+                        database.session.add(kitchen)
+                        database.session.commit()
+                        kitchenID = kitchen.kitchenID
+
                         user = Users(
                             username=username,
                             email=email,
-                            password=hashbrown
+                            password=hashbrown,
+                            fk_kitchenID=kitchenID
                         )
                         database.session.add(user)
                         database.session.commit()
-                        dbuser = database.session.scalars(database.select(Users).filter_by(username=username, password=hashbrown)).one_or_none()
-                        userid = dbuser.userID
+
+                        userid = user.userID
+                        kitchen.fk_primUser = userid
+                        database.session.commit()
+                        email = user.email
                         message = signupCodes["SUCCESS"]
 
-    return {"message": message, "userid": userid}
+    return {"message": message, "userid": userid, "email": email}
 
 
 
@@ -490,14 +540,30 @@ def save_recipe():
     user = database.session.scalars(database.select(Users).filter_by(userID=userid, username=username)).one_or_none()
     recipe = database.session.scalars(database.select(Recipes).filter_by(url=url, name=recipename)).one_or_none()
 
+
     if not recipe is None and user is not None:
+        kitchenID = user.fk_kitchenID
+        kpage = database.session.scalars(database.select(KRBP).filter_by(fk_kitchenID=kitchenID, fk_recipeID=recipe.recipeID)).one_or_none()
 
         page = Recipebookpages(
             fk_userID = user.userID,
             fk_recipeID = recipe.recipeID,
         )
+
         database.session.add(page)
-        database.session.commit()    
+        database.session.commit() 
+        
+        print(kpage)
+
+        if kpage is None:
+            kpage = KRBP(
+                fk_kitchenID = kitchenID,
+                fk_recipeID = recipe.recipeID
+            )
+
+            database.session.add(kpage)
+            database.session.commit()    
+
         message = saveRecipeCodes["SUCCESS"]
     else:
         message = saveRecipeCodes["FAILURE"]
@@ -524,24 +590,43 @@ def fetch_data():
     if username != "":
             user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
             pages = database.session.scalars(database.select(Recipebookpages).filter_by(fk_userID=user.userID)).all()
+            kpages = database.session.scalars(database.select(KRBP).filter_by(fk_kitchenID=user.fk_kitchenID)).all()
+
 
             if savedRecipesOnly == "true":
-                for page in pages: 
-                    recipeID = page.fk_recipeID
+                kList = []
+                pList = []
+                for page in pages:
+                    pList.append(page.fk_recipeID)
+
+                for kpage in kpages: 
+                    recipeID = kpage.fk_recipeID
                     recipe = database.session.scalars(database.select(Recipes).filter_by(recipeID = recipeID)).one_or_none()
                     if (name in recipe.name) and (author in recipe.author) and (site_name in recipe.site_name) and (cuisine in recipe.cuisine) and (category in recipe.category):
+                        kList.append(recipeID)
                         dic = parse_from_database(recipe)
-                        dic["userliked"] = "true"
+                        if recipeID in pList:
+                            dic["savestate"] = "user"
+                        else:
+                            dic["savestate"] = "kitchen"
                         return_list.append(dic)
+
             else:
                 all_saved_ids = []
+                all_saved_kids = []
                 for page in pages:
                     all_saved_ids.append(page.fk_recipeID)
+                for kpage in kpages:
+                    all_saved_kids.append(kpage.fk_recipeID)
                 all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).filter(Recipes.name.icontains(name), Recipes.author.icontains(author), Recipes.site_name.icontains(site_name), Recipes.cuisine.icontains(cuisine), Recipes.category.icontains(category)).offset(offset).limit(30)).all()
                 for recipe in all_recipes:
                     dic = parse_from_database(recipe)
-                    if recipe.recipeID in all_saved_ids:
-                        dic["userliked"] = "true"
+                    if recipe.recipeID in all_saved_ids and recipe.recipeID in all_saved_kids:
+                        dic["savestate"] = "user"
+                    elif recipe.recipeID in all_saved_kids:
+                        dic["savestate"] = "kitchen"
+                    else:
+                        dic["savedstate"] = "none"
                     return_list.append(dic)
     else:
         all_recipes = database.session.scalars(database.select(Recipes).order_by(Recipes.weighted_rating.desc()).filter(Recipes.name.icontains(name), Recipes.author.icontains(author), Recipes.site_name.icontains(site_name), Recipes.cuisine.icontains(cuisine), Recipes.category.icontains(category)).offset(offset).limit(30)).all()
@@ -549,6 +634,148 @@ def fetch_data():
             return_list.append(parse_from_database(recipe))
 
     return return_list
+
+
+@app.route('/get-kitchen-info', methods=['POST'])
+def get_kitchen_info():
+    username = request.json["username"]
+    message = "FAILURE"
+    members = []
+    primary = ""
+    num_members = 0
+    return_dictionary = {"members": members, "primary": primary, "num_members": num_members, "message": message}
+
+    user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+    if not user is None:
+        kitchenID = user.fk_kitchenID
+        kitchen = database.session.scalars(database.select(Kitchen).filter_by(kitchenID=kitchenID)).one_or_none()
+        if not kitchen is None:
+            primUserID = kitchen.fk_primUser
+            primaryUser = database.session.scalars(database.select(Users).filter_by(userID=primUserID)).one_or_none()
+            primary = primaryUser.username
+            num_members = kitchen.num_users
+            if num_members >= 2:
+                secUser1ID = kitchen.fk_secUser1
+                user = database.session.scalars(database.select(Users).filter_by(userID=secUser1ID)).one_or_none()
+                members.append(user)
+            if num_members >= 3:
+                secUser2ID = kitchen.fk_secUser2
+                user = database.session.scalars(database.select(Users).filter_by(userID=secUser2ID)).one_or_none()
+                members.append(user)
+            if num_members >= 4:
+                secUser3ID = kitchen.fk_secUser3
+                user = database.session.scalars(database.select(Users).filter_by(userID=secUser3ID)).one_or_none()
+                members.append(user)
+            if num_members >= 5:
+                secUser4ID = kitchen.fk_secUser4
+                user = database.session.scalars(database.select(Users).filter_by(userID=secUser4ID)).one_or_none()
+                members.append(user)
+            if num_members >= 6:
+                secUser5ID = kitchen.fk_secUser25
+                user = database.session.scalars(database.select(Users).filter_by(userID=secUser5ID)).one_or_none()
+                members.append(user)
+    return_dictionary["members"] = members
+    return_dictionary["primary"] = primary
+    return_dictionary["num_members"] = num_members
+    return_dictionary["message"] = "SUCCESS"
+    return return_dictionary
+
+@app.route("/add-user-to-kitchen", methods=['POST'])
+def add_user_to_kitchen():
+    sendingUsername = request.json["sendingUser"]
+    recievingUsername = request.json["recievingUser"]
+    message = ""
+
+    sendingUser = database.session.scalars(database.select(Users).filter_by(username=sendingUsername)).one_or_none()
+    recievingUser = database.session.scalars(database.select(Users).filter_by(username=recievingUsername)).one_or_none()
+
+    if not recievingUser is None:
+        recieveKitchen = database.session.scalars(database.select(Kitchen).filter_by(kitchenID=recievingUser.fk_kitchenID)).one_or_none()
+        if recieveKitchen.num_users > 1:
+            message = addUserCodes["USERINKITCHEN"]
+        else:
+            total_messages = database.session.execute(database.select(Messages).filter_by(senderID=sendingUser.userID, message="INVITE")).all()
+            curKitchen = database.session.scalars(database.select(Kitchen).filter_by(kitchenID=sendingUser.fk_kitchenID)).one_or_none()
+            if len(total_messages) + curKitchen.num_users == 6:
+                message = addUserCodes["FULLKITCHEN"]
+            else:
+                newMessage = Messages (
+                    senderID = sendingUser.userID,
+                    recieverID = recievingUser.userID,
+                    message = "INVITE"
+                )
+                database.session.add(newMessage)
+                database.session.commit()
+                message = addUserCodes["SUCCESS"]
+    else:
+        message = addUserCodes["INVALUSER"]
+    return {"message": message}
+
+@app.route("/find-messages", methods=['POST'])
+def find_messages():
+    username = request.json["username"]
+    user = database.session.scalars(database.select(Users).filter_by(username=username)).one_or_none()
+
+    messageList = []
+    userList = []
+
+
+    messages = database.session.scalars(database.select(Messages).filter_by(recieverID=user.userID)).all()
+
+    if not messages is None:
+        for message in messages:
+            messageList.append(message.message)
+            sendingUser = database.session.scalars(database.select(Users).filter_by(userID=message.senderID)).one_or_none()
+            userList.append(sendingUser.username)
+
+    return {"messages": messageList, "from": userList}
+
+
+@app.route("/accept-invite", methods=['POST'])
+def accept_invite():
+    inviteusername = request.json["inviteusername"]
+    acceptingusername = request.json["acceptingusername"]
+
+    inviteuser = database.session.scalars(database.select(Users).filter_by(username=inviteusername)).one_or_none()
+    newkitchen = database.session.scalars(database.select(Kitchen).filter_by(kitchenID=inviteuser.fk_kitchenID)).one_or_none()
+    
+    acceptinguser = database.session.scalars(database.select(Users).filter_by(username=acceptingusername)).one_or_none()
+
+
+    oldKitchenID = acceptinguser.fk_kitchenID
+    acceptinguser.fk_kitchenID = newkitchen.kitchenID
+    
+    oldkitchen = database.session.scalars(database.select(Kitchen).filter_by(kitchenID=oldKitchenID)).one_or_none()
+    oldkpages = database.session.scalars(database.select(KRBP).filter_by(fk_kitchenID=oldKitchenID)).all()
+    for kpage in oldkpages:
+        otherpage = database.session.scalars(database.select(KRBP).filter_by(fk_kitchenID=newkitchen.kitchenID, fk_recipeID=kpage.fk_recipeID)).one_or_none()
+        if otherpage is None:
+            newkpage = KRBP(
+                fk_kitchenID = newkitchen.kitchenID,
+                fk_recipeID = kpage.fk_recipeID
+            )
+            database.session.add(newkpage)
+        database.session.delete(kpage)
+    database.session.delete(oldkitchen)
+
+
+    oldmessage = database.session.scalars(database.select(Messages).filter_by(recieverID=acceptinguser.userID, senderID=inviteuser.userID,message="INVITE")).one_or_none()
+    newmessage = Messages (
+        senderID = acceptinguser.userID,
+        recieverID = inviteuser.userID,
+        message = "ACCEPT"
+    )
+
+    database.session.add(newmessage)
+    database.session.delete(oldmessage)
+
+    database.session.commit()
+
+    return {"message": "SUCCESS"}
+
+
+
+
 
 
 
